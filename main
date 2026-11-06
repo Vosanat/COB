@@ -1,0 +1,179 @@
+#!/usr/bin/env python3
+"""
+Скрипт читает текстовый лог, находит неудачные попытки входа, группирует их
+по IP-адресу источника и выводит предупреждение для адресов, число попыток
+с которых превышает заданный порог.
+
+Пример запуска:
+    python main.py L1.txt
+    python main.py L1.txt --threshold 3 --window 10
+"""
+
+import argparse
+import re
+import sys
+from collections import Counter
+from datetime import datetime, timedelta
+from typing import Iterable, Optional
+
+# --- Константы -------------------------------------------------------------
+
+DEFAULT_THRESHOLD = 5
+LOG_ENCODING = "utf-8"
+
+# Общая часть: временная метка syslog в начале строки, например "Oct 13 14:00:27".
+TIMESTAMP_PATTERN = re.compile(r"^(?P<ts>[A-Z][a-z]{2}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2})")
+TIMESTAMP_FORMAT = "%Y %b %d %H:%M:%S"  # год добавляется программно
+
+# Неудачный ввод пароля: "Failed password for <user> from <ip> ...".
+FAILED_LOGIN_PATTERN = re.compile(
+    r"sshd\[\d+\]:\s+Failed password for (?:invalid user )?\S+ "
+    r"from (?P<ip>\d{1,3}(?:\.\d{1,3}){3})\b"
+)
+
+# Попытка входа под несуществующим пользователем: "Invalid user <user> from <ip>".
+INVALID_USER_PATTERN = re.compile(
+    r"sshd\[\d+\]:\s+Invalid user \S+ "
+    r"from (?P<ip>\d{1,3}(?:\.\d{1,3}){3})\b"
+)
+
+FAILURE_PATTERNS = (FAILED_LOGIN_PATTERN, INVALID_USER_PATTERN)
+
+
+# --- Чтение и разбор лога --------------------------------------------------
+
+def read_log(path: str) -> list[str]:
+    """Прочитать лог-файл и вернуть список его строк.
+
+    При ошибке (файл не найден, нет доступа, неверная кодировка) выводит
+    сообщение в stderr и возвращает пустой список.
+    """
+    try:
+        with open(path, "r", encoding=LOG_ENCODING) as file:
+            return file.read().splitlines()
+    except FileNotFoundError:
+        print(f"[ERROR] Файл не найден: {path}", file=sys.stderr)
+    except PermissionError:
+        print(f"[ERROR] Нет прав на чтение файла: {path}", file=sys.stderr)
+    except UnicodeDecodeError:
+        print(
+            f"[ERROR] Не удалось декодировать файл {path} как {LOG_ENCODING}.",
+            file=sys.stderr,
+        )
+    except OSError as error:
+        print(f"[ERROR] Ошибка чтения файла {path}: {error}", file=sys.stderr)
+    return []
+
+
+def parse_timestamp(line: str, year: int) -> Optional[datetime]:
+    """Извлечь временную метку из строки лога.
+
+    В формате syslog год не указывается, поэтому он передаётся явно.
+    Возвращает None, если строка не начинается с корректной метки.
+    """
+    match = TIMESTAMP_PATTERN.match(line)
+    if match is None:
+        return None
+    try:
+        return datetime.strptime(f"{year} {match.group('ts')}", TIMESTAMP_FORMAT)
+    except ValueError:
+        return None
+
+
+def extract_failed_ip(line: str) -> Optional[str]:
+    """Вернуть IP источника, если строка описывает неудачную попытку входа."""
+    for pattern in FAILURE_PATTERNS:
+        match = pattern.search(line)
+        if match:
+            return match.group("ip")
+    return None
+
+
+def filter_by_window(lines: Iterable[str], minutes: int, year: int) -> list[str]:
+    """Оставить строки, попавшие в последние `minutes` минут лога.
+
+    Окно отсчитывается от времени последней записи в файле, а не от текущего
+    времени. Строки без временной метки в окно не попадают.
+    """
+    stamped = [(parse_timestamp(line, year), line) for line in lines]
+    timestamps = [ts for ts, _ in stamped if ts is not None]
+    if not timestamps:
+        return []
+
+    window_start = max(timestamps) - timedelta(minutes=minutes)
+    return [line for ts, line in stamped if ts is not None and ts >= window_start]
+
+
+def count_failed_attempts(lines: Iterable[str]) -> Counter:
+    """Подсчитать неудачные попытки входа для каждого уникального IP."""
+    attempts: Counter = Counter()
+    for line in lines:
+        ip = extract_failed_ip(line)
+        if ip is not None:
+            attempts[ip] += 1
+    return attempts
+
+
+# --- Вывод результатов -----------------------------------------------------
+
+def report(attempts: Counter, threshold: int) -> int:
+    """Вывести алерты и общую статистику. Вернуть число сработавших алертов."""
+    alerts = [(ip, n) for ip, n in attempts.most_common() if n > threshold]
+
+    for ip, count in alerts:
+        print(f"[ALERT] Brute-force detected from {ip}. Attempts: {count}.")
+
+    print("\nСтатистика активности IP:")
+    if attempts:
+        for ip, count in attempts.most_common():
+            print(f"  {ip}: {count} попыток")
+    else:
+        print("  Неудачных попыток входа не обнаружено.")
+    print(f"Всего неудачных попыток: {sum(attempts.values())}")
+
+    return len(alerts)
+
+
+# --- Точка входа -----------------------------------------------------------
+
+def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
+    """Разобрать аргументы командной строки."""
+    parser = argparse.ArgumentParser(
+        description="Поиск brute-force атак в журнале sshd."
+    )
+    parser.add_argument("logfile", help="путь к файлу лога")
+    parser.add_argument(
+        "--threshold",
+        type=int,
+        default=DEFAULT_THRESHOLD,
+        help=f"порог неудачных попыток с одного IP (по умолчанию {DEFAULT_THRESHOLD})",
+    )
+    parser.add_argument(
+        "--window",
+        type=int,
+        default=None,
+        metavar="MINUTES",
+        help="анализировать только последние N минут относительно последней записи",
+    )
+    return parser.parse_args(argv)
+
+
+def main(argv: Optional[list[str]] = None) -> int:
+    """Запустить анализ. Код возврата: 0 — успех, 1 — не удалось прочитать лог."""
+    args = parse_args(argv)
+
+    lines = read_log(args.logfile)
+    if not lines:
+        print("Нет данных для анализа.")
+        return 1
+
+    if args.window is not None:
+        lines = filter_by_window(lines, args.window, datetime.now().year)
+
+    attempts = count_failed_attempts(lines)
+    report(attempts, args.threshold)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
