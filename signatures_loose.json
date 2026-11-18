@@ -1,0 +1,139 @@
+{
+  "signatures": [
+    {
+      "name": "Port_Scan",
+      "type": "scan",
+      "scope": "src_dst",
+      "window": 10,
+      "severity": "MEDIUM",
+      "description": "Более 10 уникальных портов назначения с одного IP на один IP за 10 секунд",
+      "conditions": [
+        {
+          "field": "unique_syn_ports",
+          "op": ">",
+          "value": 10
+        },
+        {
+          "field": "half_open_ratio",
+          "op": ">",
+          "value": 0.8
+        }
+      ]
+    },
+    {
+      "name": "Port_Probe",
+      "type": "scan",
+      "scope": "src_dst",
+      "window": 10,
+      "severity": "LOW",
+      "description": "От 5 до 10 уникальных портов назначения за 10 секунд (разведка)",
+      "conditions": [
+        {
+          "field": "unique_syn_ports",
+          "op": ">=",
+          "value": 5
+        },
+        {
+          "field": "unique_syn_ports",
+          "op": "<=",
+          "value": 10
+        },
+        {
+          "field": "half_open_ratio",
+          "op": ">",
+          "value": 0.8
+        }
+      ]
+    },
+    {
+      "name": "SYN_Flood",
+      "type": "dos",
+      "scope": "dst_port",
+      "window": 5,
+      "severity": "HIGH",
+      "description": "Более 50 SYN-пакетов на один IP:порт за 5 секунд, почти без завершённых рукопожатий",
+      "conditions": [
+        {
+          "field": "syn_packets",
+          "op": ">",
+          "value": 50
+        },
+        {
+          "field": "syn_ratio",
+          "op": ">",
+          "value": 0.9
+        }
+      ]
+    },
+    {
+      "name": "ICMP_Smurf",
+      "type": "dos",
+      "scope": "flow",
+      "window": 10,
+      "severity": "HIGH",
+      "description": "Не менее 5 ICMP Echo Request на широковещательный адрес",
+      "conditions": [
+        {
+          "field": "proto",
+          "op": "==",
+          "value": "ICMP"
+        },
+        {
+          "field": "is_echo_request",
+          "op": "==",
+          "value": true
+        },
+        {
+          "field": "dst_is_broadcast",
+          "op": "==",
+          "value": true
+        },
+        {
+          "field": "packets",
+          "op": ">=",
+          "value": 5
+        }
+      ]
+    },
+    {
+      "name": "ICMP_Flood",
+      "type": "dos",
+      "scope": "flow",
+      "window": 10,
+      "severity": "MEDIUM",
+      "description": "(слишком общее) более 5 ICMP Echo Request",
+      "conditions": [
+        {
+          "field": "proto",
+          "op": "==",
+          "value": "ICMP"
+        },
+        {
+          "field": "is_echo_request",
+          "op": "==",
+          "value": true
+        },
+        {
+          "field": "packets",
+          "op": ">",
+          "value": 5
+        }
+      ]
+    },
+    {
+      "name": "SSH_Brute_Force",
+      "type": "bruteforce",
+      "scope": "log_src",
+      "window": 120,
+      "severity": "HIGH",
+      "description": "Более 5 неудачных попыток входа по SSH с одного IP за 2 минуты (лог sshd)",
+      "conditions": [
+        {
+          "field": "failed_attempts",
+          "op": ">",
+          "value": 5
+        }
+      ]
+    }
+  ]
+}

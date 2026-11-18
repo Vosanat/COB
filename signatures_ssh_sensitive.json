@@ -1,0 +1,19 @@
+{
+  "signatures": [
+    {
+      "name": "SSH_Brute_Force",
+      "type": "bruteforce",
+      "scope": "log_src",
+      "window": 120,
+      "severity": "MEDIUM",
+      "description": "(чувствительно) более 3 неудачных попыток входа по SSH с одного IP за 2 минуты",
+      "conditions": [
+        {
+          "field": "failed_attempts",
+          "op": ">",
+          "value": 3
+        }
+      ]
+    }
+  ]
+}
